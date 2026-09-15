@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "689661361773",
+    "firebase_url": "https://buber-ea9c1-default-rtdb.firebaseio.com",
+    "project_id": "buber-ea9c1",
+    "storage_bucket": "buber-ea9c1.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:689661361773:android:b1eb37e109631444160964",
+        "android_client_info": {
+          "package_name": "com.example.buber"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA4KnOTvvl3yB8NbwtxtskjXJ4kSj6rHPw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
