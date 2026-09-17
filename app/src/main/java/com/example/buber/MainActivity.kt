@@ -2,9 +2,14 @@ package com.example.buber
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
-import android.os.Looper
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.webkit.WebChromeClient
+import android.util.Log
 
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -46,7 +51,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
 
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -61,7 +65,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -69,50 +72,28 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 
 import androidx.core.content.ContextCompat
 
 import com.google.android.gms.location.FusedLocationProviderClient
-import com.google.android.gms.location.LocationCallback
-import com.google.android.gms.location.LocationRequest
-import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.Priority
-
-import com.google.firebase.database.FirebaseDatabase
 
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.isActive
-
+import kotlinx.coroutines.launch
 
 
 class MainActivity : ComponentActivity() {
 
-    private lateinit var fusedLocationClient: FusedLocationProviderClient
-    private lateinit var locationCallback: LocationCallback
-
-    private val onibusRef =
-        FirebaseDatabase.getInstance().getReference("onibus/TESTE-1")
-
-    private var latitude by mutableStateOf("--")
-    private var longitude by mutableStateOf("--")
-    private var velocidade by mutableStateOf("--")
-    private var precisao by mutableStateOf("--")
-    private var direcao by mutableStateOf("--")
-
-    private var rastreando by mutableStateOf(false)
-
-    private var ultimoEnvioMillis by mutableStateOf(0L)
-
+    private var mostrarSplash by mutableStateOf(true)
+    private var iniciarAoConceder = false
     private var segundosDesdeEnvio by mutableStateOf(0)
 
-    private var precisaoMetros by mutableStateOf(999f)
-    private var mostrarSplash by mutableStateOf(true)
+    // "inicial" ou "mapa"
+    private var telaAtual by mutableStateOf("inicial")
+    private var menuAberto by mutableStateOf(false)
 
-    private var iniciarAoConceder = false
-
-    // Cores do tema escuro
     private val fundoEscuro = Color(0xFF0A0D0C)
     private val cardEscuro = Color(0xFF12181A)
     private val cinzaClaro = Color(0xFF9AA0A6)
@@ -129,50 +110,13 @@ class MainActivity : ComponentActivity() {
             val aproximada = permissoes[Manifest.permission.ACCESS_COARSE_LOCATION] == true
 
             if ((precisa || aproximada) && iniciarAoConceder) {
-                iniciarGPS()
+                iniciarServico()
             }
         }
 
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
-
-        locationCallback = object : LocationCallback() {
-
-            override fun onLocationResult(locationResult: LocationResult) {
-
-                for (location in locationResult.locations) {
-
-                    val lat = location.latitude
-                    val lon = location.longitude
-                    val vel = location.speed * 3.6
-                    val prec = location.accuracy
-                    val dir = if (location.hasBearing()) location.bearing else -1f
-
-                    latitude = "%.6f".format(lat)
-                    longitude = "%.6f".format(lon)
-                    velocidade = "%.1f km/h".format(vel)
-                    precisao = "%.1f metros".format(prec)
-                    direcao = if (location.hasBearing()) "%.0f°".format(dir) else "Indisponível"
-                    precisaoMetros = prec
-                    ultimoEnvioMillis = System.currentTimeMillis()
-
-                    val dados = mapOf(
-                        "latitude" to lat,
-                        "longitude" to lon,
-                        "velocidade" to vel,
-                        "direcao" to dir,
-                        "precisao" to prec,
-                        "timestamp" to System.currentTimeMillis(),
-                        "status" to "online"
-                    )
-
-                    onibusRef.setValue(dados)
-                }
-            }
-        }
 
         setContent {
             BuberApp()
@@ -193,64 +137,52 @@ class MainActivity : ComponentActivity() {
     }
 
 
+    private fun permissoesNecessarias(): Array<String> {
+        val lista = mutableListOf(
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            lista.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        return lista.toTypedArray()
+    }
+
+
     private fun aoClicarBotao() {
-        if (rastreando) {
-            pararGPS()
+        if (LocationService.rodando.value) {
+            pararServico()
         } else if (temPermissao()) {
-            iniciarGPS()
+            iniciarServico()
         } else {
             iniciarAoConceder = true
-            solicitadorDePermissao.launch(
-                arrayOf(
-                    Manifest.permission.ACCESS_FINE_LOCATION,
-                    Manifest.permission.ACCESS_COARSE_LOCATION
-                )
-            )
+            solicitadorDePermissao.launch(permissoesNecessarias())
         }
     }
 
 
+    private fun iniciarServico() {
+        val intent = Intent(this, LocationService::class.java)
+        ContextCompat.startForegroundService(this, intent)
+    }
+
+
+    private fun pararServico() {
+        val intent = Intent(this, LocationService::class.java)
+        stopService(intent)
+    }
+
+
     @SuppressLint("MissingPermission")
-    private fun iniciarGPS() {
+    private fun obterLocalizacaoUnica(aoObter: (Double, Double) -> Unit) {
+        val cliente: FusedLocationProviderClient =
+            LocationServices.getFusedLocationProviderClient(this)
 
-        if (!temPermissao()) return
-
-        val locationRequest = LocationRequest.Builder(
-            Priority.PRIORITY_HIGH_ACCURACY,
-            5000
-        )
-            .setMinUpdateIntervalMillis(3000)
-            .build()
-
-        fusedLocationClient.requestLocationUpdates(
-            locationRequest,
-            locationCallback,
-            Looper.getMainLooper()
-        )
-
-        rastreando = true
-    }
-
-
-    private fun pararGPS() {
-
-        fusedLocationClient.removeLocationUpdates(locationCallback)
-
-        onibusRef.child("status").setValue("offline")
-
-        rastreando = false
-
-        latitude = "--"
-        longitude = "--"
-        velocidade = "--"
-        precisao = "--"
-        direcao = "--"
-    }
-
-
-    override fun onDestroy() {
-        super.onDestroy()
-        fusedLocationClient.removeLocationUpdates(locationCallback)
+        cliente.lastLocation.addOnSuccessListener { location ->
+            if (location != null) {
+                aoObter(location.latitude, location.longitude)
+            }
+        }
     }
 
 
@@ -268,7 +200,7 @@ class MainActivity : ComponentActivity() {
                 if (splash) {
                     SplashScreen(onFinished = { mostrarSplash = false })
                 } else {
-                    TelaPrincipal()
+                    ConteudoApp()
                 }
             }
         }
@@ -285,30 +217,20 @@ class MainActivity : ComponentActivity() {
             launch {
                 escala.animateTo(
                     targetValue = 1f,
-                    animationSpec = tween(
-                        durationMillis = 1100,
-                        easing = FastOutSlowInEasing
-                    )
+                    animationSpec = tween(durationMillis = 1100, easing = FastOutSlowInEasing)
                 )
             }
             launch {
                 opacidade.animateTo(
                     targetValue = 1f,
-                    animationSpec = tween(
-                        durationMillis = 900,
-                        easing = LinearOutSlowInEasing
-                    )
+                    animationSpec = tween(durationMillis = 900, easing = LinearOutSlowInEasing)
                 )
             }
-
             delay(1500)
             onFinished()
         }
 
-        Surface(
-            modifier = Modifier.fillMaxSize(),
-            color = fundoEscuro
-        ) {
+        Surface(modifier = Modifier.fillMaxSize(), color = fundoEscuro) {
             Column(
                 modifier = Modifier.fillMaxSize(),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -318,7 +240,7 @@ class MainActivity : ComponentActivity() {
                     painter = painterResource(id = R.drawable.logo_buber),
                     contentDescription = "Logo BUBER",
                     modifier = Modifier
-                        .fillMaxWidth(0.9f)
+                        .fillMaxWidth(0.7f)
                         .graphicsLayer {
                             scaleX = escala.value
                             scaleY = escala.value
@@ -331,16 +253,134 @@ class MainActivity : ComponentActivity() {
 
 
     @androidx.compose.runtime.Composable
-    fun TelaPrincipal() {
+    fun ConteudoApp() {
+
+        val rastreando = LocationService.rodando.value
+
+        val corBotao by animateColorAsState(
+            targetValue = if (rastreando) verdeNeon else vermelhoNeon,
+            animationSpec = tween(500),
+            label = "corBotao"
+        )
+
+        Box(modifier = Modifier.fillMaxSize()) {
+
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 24.dp, vertical = 20.dp)
+            ) {
+
+                // ===== BARRA SUPERIOR =====
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+
+                    Column(
+                        modifier = Modifier
+                            .width(24.dp)
+                            .clickable { menuAberto = !menuAberto }
+                    ) {
+                        repeat(3) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(2.5.dp)
+                                    .background(Color.White)
+                            )
+                            Spacer(modifier = Modifier.height(5.dp))
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(cardEscuro)
+                            .border(1.dp, corBotao.copy(alpha = 0.5f), RoundedCornerShape(50))
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier.size(8.dp).clip(CircleShape).background(corBotao)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (rastreando) "ONLINE" else "OFFLINE",
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    when (telaAtual) {
+                        "mapa" -> TelaMapa()
+                        else -> ConteudoInicial()
+                    }
+                }
+            }
+
+            // ===== MENU SUSPENSO =====
+            if (menuAberto) {
+                Box(
+                    modifier = Modifier
+                        .padding(top = 56.dp, start = 24.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(cardEscuro)
+                        .border(1.dp, Color(0xFF2A2F2D), RoundedCornerShape(14.dp))
+                ) {
+                    Column(modifier = Modifier.padding(vertical = 6.dp)) {
+                        ItemMenu("Tela inicial") {
+                            telaAtual = "inicial"
+                            menuAberto = false
+                        }
+                        ItemMenu("Mapa") {
+                            telaAtual = "mapa"
+                            menuAberto = false
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+
+    @androidx.compose.runtime.Composable
+    fun ItemMenu(texto: String, aoClicar: () -> Unit) {
+        Text(
+            text = texto,
+            color = Color.White,
+            fontSize = 15.sp,
+            modifier = Modifier
+                .clickable { aoClicar() }
+                .fillMaxWidth()
+                .padding(horizontal = 22.dp, vertical = 12.dp)
+        )
+    }
+
+
+    @androidx.compose.runtime.Composable
+    fun ConteudoInicial() {
+
+        val rastreando = LocationService.rodando.value
+        val ultimoEnvio = LocationService.ultimoEnvioMillis.value
+        val precisaoMetros = LocationService.precisaoMetros.value
+
         LaunchedEffect(rastreando) {
             while (isActive) {
-                if (rastreando && ultimoEnvioMillis > 0) {
+                if (rastreando && ultimoEnvio > 0) {
                     segundosDesdeEnvio =
-                        ((System.currentTimeMillis() - ultimoEnvioMillis) / 1000).toInt()
+                        ((System.currentTimeMillis() - ultimoEnvio) / 1000).toInt()
                 }
                 delay(1000)
             }
         }
+
         val corBotao by animateColorAsState(
             targetValue = if (rastreando) verdeNeon else vermelhoNeon,
             animationSpec = tween(500),
@@ -357,219 +397,158 @@ class MainActivity : ComponentActivity() {
         )
 
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 24.dp, vertical = 20.dp)
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
         ) {
 
-            // ===== BARRA SUPERIOR =====
+            Image(
+                painter = painterResource(id = R.drawable.logo_buber),
+                contentDescription = "Logo BUBER",
+                modifier = Modifier.fillMaxWidth(0.75f)
+            )
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Text(
+                text = "T R A C K E R",
+                color = cinzaClaro,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(cardEscuro)
+                    .padding(horizontal = 14.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                Text(text = "ID DO ÔNIBUS  ", color = cinzaClaro, fontSize = 11.sp)
+                Text(
+                    text = LocationService.ID_ONIBUS,
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
 
-                Column(modifier = Modifier.width(24.dp)) {
-                    repeat(3) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(2.5.dp)
-                                .background(Color.White)
-                        )
-                        Spacer(modifier = Modifier.height(5.dp))
-                    }
-                }
+            Spacer(modifier = Modifier.height(48.dp))
 
-                Row(
+            Box(contentAlignment = Alignment.Center) {
+
+                Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(50))
+                        .size(tamanhoBotao + 70.dp)
+                        .background(
+                            brush = Brush.radialGradient(
+                                colors = listOf(corBotao.copy(alpha = 0.30f), Color.Transparent)
+                            ),
+                            shape = CircleShape
+                        )
+                )
+
+                Box(
+                    modifier = Modifier
+                        .size(tamanhoBotao)
+                        .clip(CircleShape)
                         .background(cardEscuro)
-                        .border(1.dp, corBotao.copy(alpha = 0.5f), RoundedCornerShape(50))
-                        .padding(horizontal = 14.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .border(width = 6.dp, color = corBotao, shape = CircleShape)
+                        .clickable { aoClicarBotao() },
+                    contentAlignment = Alignment.Center
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(corBotao)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = if (rastreando) "ONLINE" else "OFFLINE",
-                        color = Color.White,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    IconePower(cor = corBotao, modifier = Modifier.size(tamanhoBotao * 0.35f))
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(28.dp))
 
-            // ===== CONTEÚDO CENTRAL =====
-            Column(
-                modifier = Modifier.fillMaxSize(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
+            AnimatedVisibility(
+                visible = rastreando,
+                enter = fadeIn(tween(500)) + expandVertically(tween(500)),
+                exit = fadeOut(tween(300)) + shrinkVertically(tween(300))
             ) {
 
-                Image(
-                    painter = painterResource(id = R.drawable.logo_buber),
-                    contentDescription = "Logo BUBER",
-                    modifier = Modifier
-                        .fillMaxWidth(1f)
-                )
-
-                Spacer(modifier = Modifier.height(6.dp))
-
-                Text(
-                    text = "T R A C K E R",
-                    color = cinzaClaro,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium
-                )
-
-                Spacer(modifier = Modifier.height(48.dp))
-
-                // ===== BOTÃO COM BRILHO =====
-                Box(contentAlignment = Alignment.Center) {
-
-                    Box(
-                        modifier = Modifier
-                            .size(tamanhoBotao + 70.dp)
-                            .background(
-                                brush = Brush.radialGradient(
-                                    colors = listOf(
-                                        corBotao.copy(alpha = 0.30f),
-                                        Color.Transparent
-                                    )
-                                ),
-                                shape = CircleShape
-                            )
-                    )
-
-                    Box(
-                        modifier = Modifier
-                            .size(tamanhoBotao)
-                            .clip(CircleShape)
-                            .background(cardEscuro)
-                            .border(width = 6.dp, color = corBotao, shape = CircleShape)
-                            .clickable { aoClicarBotao() },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        IconePower(cor = corBotao, modifier = Modifier.size(tamanhoBotao * 0.35f))
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(28.dp))
-
-                AnimatedVisibility(
-                    visible = rastreando,
-                    enter = fadeIn(tween(500)) + expandVertically(tween(500)),
-                    exit = fadeOut(tween(300)) + shrinkVertically(tween(300))
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.fillMaxWidth()
                 ) {
 
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(cardEscuro)
+                            .border(1.dp, verdeNeon.copy(alpha = 0.5f), RoundedCornerShape(50))
+                            .padding(horizontal = 18.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(verdeNeon))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(text = "Compartilhando localização", color = Color.White, fontSize = 14.sp)
+                    }
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
                     Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(cardEscuro)
+                            .padding(20.dp)
                     ) {
 
                         Row(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(50))
-                                .background(cardEscuro)
-                                .border(1.dp, verdeNeon.copy(alpha = 0.5f), RoundedCornerShape(50))
-                                .padding(horizontal = 18.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(CircleShape)
-                                    .background(verdeNeon)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Compartilhando localização",
-                                color = Color.White,
-                                fontSize = 14.sp
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(20.dp))
-
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(20.dp))
-                                .background(cardEscuro)
-                                .padding(20.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = if (segundosDesdeEnvio <= 1)
-                                        "Último envio: agora"
-                                    else
-                                        "Último envio: há $segundosDesdeEnvio s",
-                                    color = cinzaClaro,
-                                    fontSize = 13.sp
-                                )
-
-                                IconeSinal(precisaoMetros = precisaoMetros)
-                            }
-
-                            Spacer(modifier = Modifier.height(14.dp))
-                            LinhaDado("Latitude", latitude, verdeNeon)
-                            LinhaDado("Longitude", longitude, verdeNeon)
-                            LinhaDado("Velocidade", velocidade, verdeNeon)
-                            LinhaDado("Precisão", precisao, verdeNeon)
-                            LinhaDado("Direção", direcao, verdeNeon)
-                        }
-
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(cardEscuro)
-                                .padding(horizontal = 18.dp, vertical = 14.dp),
+                            modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Column {
-                                Text(
-                                    text = "VEÍCULO",
-                                    color = cinzaClaro,
-                                    fontSize = 11.sp
-                                )
-                                Text(
-                                    text = "TESTE-1",
-                                    color = Color.White,
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
+                            Text(
+                                text = if (segundosDesdeEnvio <= 1)
+                                    "Último envio: agora"
+                                else
+                                    "Último envio: há $segundosDesdeEnvio s",
+                                color = cinzaClaro,
+                                fontSize = 13.sp
+                            )
+                            IconeSinal(precisaoMetros = precisaoMetros)
+                        }
 
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(8.dp)
-                                        .clip(CircleShape)
-                                        .background(verdeNeon)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "Em operação",
-                                    color = cinzaClaro,
-                                    fontSize = 13.sp
-                                )
-                            }
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        LinhaDado("Latitude", LocationService.latitude.value, verdeNeon)
+                        LinhaDado("Longitude", LocationService.longitude.value, verdeNeon)
+                        LinhaDado("Velocidade", LocationService.velocidade.value, verdeNeon)
+                        LinhaDado("Precisão", LocationService.precisao.value, verdeNeon)
+                        LinhaDado("Direção", LocationService.direcao.value, verdeNeon)
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(cardEscuro)
+                            .padding(horizontal = 18.dp, vertical = 14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(text = "VEÍCULO", color = cinzaClaro, fontSize = 11.sp)
+                            Text(
+                                text = LocationService.ID_ONIBUS,
+                                color = Color.White,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(verdeNeon))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(text = "Em operação", color = cinzaClaro, fontSize = 13.sp)
                         }
                     }
                 }
@@ -579,21 +558,166 @@ class MainActivity : ComponentActivity() {
 
 
     @androidx.compose.runtime.Composable
+    fun TelaMapa() {
+
+        var latInicial by remember { mutableStateOf(-29.7604) }
+        var lonInicial by remember { mutableStateOf(-51.1469) }
+        var pronto by remember { mutableStateOf(false) }
+        var webViewRef by remember { mutableStateOf<WebView?>(null) }
+
+        LaunchedEffect(Unit) {
+            val latAtual = LocationService.latitude.value.replace(",", ".").toDoubleOrNull()
+            val lonAtual = LocationService.longitude.value.replace(",", ".").toDoubleOrNull()
+
+            if (LocationService.rodando.value && latAtual != null && lonAtual != null) {
+                latInicial = latAtual
+                lonInicial = lonAtual
+                pronto = true
+            } else if (temPermissao()) {
+                obterLocalizacaoUnica { lat, lon ->
+                    latInicial = lat
+                    lonInicial = lon
+                    pronto = true
+                }
+            } else {
+                pronto = true
+            }
+        }
+
+        LaunchedEffect(Unit) {
+            while (isActive) {
+                if (LocationService.rodando.value) {
+                    val lat = LocationService.latitude.value.replace(",", ".").toDoubleOrNull()
+                    val lon = LocationService.longitude.value.replace(",", ".").toDoubleOrNull()
+                    if (lat != null && lon != null) {
+                        webViewRef?.evaluateJavascript("moverMarcador($lat, $lon)", null)
+                    }
+                }
+                delay(4000)
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clip(RoundedCornerShape(20.dp))
+        ) {
+            if (pronto) {
+                AndroidView(
+                    factory = { ctx ->
+                        WebView(ctx).apply {
+                            settings.javaScriptEnabled = true
+                            settings.domStorageEnabled = true
+
+                            webViewClient = object : WebViewClient() {
+                                override fun onReceivedError(
+                                    view: WebView?,
+                                    errorCode: Int,
+                                    description: String?,
+                                    failingUrl: String?
+                                ) {
+                                    Log.e("BUBER_MAPA", "Erro ao carregar: $description ($failingUrl)")
+                                }
+                            }
+
+                            webChromeClient = object : WebChromeClient() {
+                                override fun onConsoleMessage(msg: android.webkit.ConsoleMessage?): Boolean {
+                                    Log.e("BUBER_MAPA", "Console: ${msg?.message()} (linha ${msg?.lineNumber()})")
+                                    return true
+                                }
+                            }
+
+                            webViewRef = this
+                            loadDataWithBaseURL(
+                                "https://unpkg.com/",
+                                htmlMapa(latInicial, lonInicial),
+                                "text/html",
+                                "UTF-8",
+                                null
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        }
+    }
+
+
+    private fun htmlMapa(lat: Double, lon: Double): String {
+        return """
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+                <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+                <style>
+                    html, body, #mapa { height: 100%; margin: 0; padding: 0; background: #0A0D0C; }
+                </style>
+            </head>
+            <body>
+                <div id="mapa"></div>
+                               <script>
+                    console.log('PASSO 1: script iniciou');
+
+                    try {
+                        console.log('PASSO 2: antes de criar o mapa');
+
+                        var mapa = L.map('mapa').setView([${'$'}lat, ${'$'}lon], 16);
+
+                        console.log('PASSO 3: mapa criado');
+
+                        var camadaMapa = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                            maxZoom: 19,
+                            attribution: '&copy; OpenStreetMap'
+                        }).addTo(mapa);
+
+                        console.log('PASSO 4: camada de tiles adicionada');
+
+                        camadaMapa.on('tileerror', function(erro) {
+                            console.log('ERRO DE TILE detectado');
+                        });
+
+                        camadaMapa.on('load', function() {
+                            console.log('PASSO 5: tiles carregados com sucesso');
+                        });
+
+                        var marcador = L.circleMarker([${'$'}lat, ${'$'}lon], {
+                            radius: 10,
+                            fillColor: "#00E676",
+                            color: "#00E676",
+                            weight: 2,
+                            opacity: 1,
+                            fillOpacity: 0.85
+                        }).addTo(mapa);
+
+                        console.log('PASSO 6: marcador adicionado, tudo certo');
+
+                    } catch (erro) {
+                        console.log('ERRO CAPTURADO: ' + erro.message);
+                    }
+
+                    function moverMarcador(lat, lng) {
+                        marcador.setLatLng([lat, lng]);
+                        mapa.panTo([lat, lng]);
+                    }
+                </script>
+            </body>
+            </html>
+        """.trimIndent()
+    }
+
+
+    @androidx.compose.runtime.Composable
     fun LinhaDado(rotulo: String, valor: String, corAcento: Color) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 8.dp),
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(6.dp)
-                        .clip(CircleShape)
-                        .background(corAcento)
-                )
+                Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(corAcento))
                 Spacer(modifier = Modifier.width(10.dp))
                 Text(text = rotulo, color = cinzaClaro, fontSize = 14.sp)
             }
@@ -602,36 +726,39 @@ class MainActivity : ComponentActivity() {
     }
 
 
-    @Composable
+    @androidx.compose.runtime.Composable
     fun IconeSinal(precisaoMetros: Float, modifier: Modifier = Modifier) {
-        val corSinal = when {
-            precisaoMetros <= 10f -> verdeNeon
-            precisaoMetros <= 30f -> Color(0xFFFDD835)
-            precisaoMetros <= 100f -> Color(0xFFFB8C00)
-            else -> vermelhoNeon
+
+        val corBom = Color(0xFF00E676)
+        val corMedio = Color(0xFFFFC107)
+        val corRuim = Color(0xFFFF3B30)
+        val corInativo = Color(0xFF3A3F3D)
+
+        val nivel = when {
+            precisaoMetros <= 15f -> 3
+            precisaoMetros <= 40f -> 2
+            else -> 1
+        }
+
+        val cor = when (nivel) {
+            3 -> corBom
+            2 -> corMedio
+            else -> corRuim
         }
 
         Row(
             modifier = modifier,
-            horizontalArrangement = Arrangement.spacedBy(3.dp),
-            verticalAlignment = Alignment.Bottom
+            verticalAlignment = Alignment.Bottom,
+            horizontalArrangement = Arrangement.spacedBy(3.dp)
         ) {
-            repeat(4) { index ->
-                val ativa = when (index) {
-                    0 -> true
-                    1 -> precisaoMetros <= 100f
-                    2 -> precisaoMetros <= 30f
-                    3 -> precisaoMetros <= 10f
-                    else -> false
-                }
+            val alturas = listOf(8.dp, 13.dp, 18.dp)
+            for (i in 0..2) {
                 Box(
                     modifier = Modifier
                         .width(4.dp)
-                        .height((4 + (index * 4)).dp)
-                        .background(
-                            if (ativa) corSinal else cinzaClaro.copy(alpha = 0.3f),
-                            RoundedCornerShape(topStart = 1.dp, topEnd = 1.dp)
-                        )
+                        .height(alturas[i])
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(if (i < nivel) cor else corInativo)
                 )
             }
         }
