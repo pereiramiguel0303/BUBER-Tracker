@@ -193,14 +193,15 @@ class MainActivity : ComponentActivity() {
             modifier = Modifier.fillMaxSize(),
             color = fundoEscuro
         ) {
-            Crossfade(
-                targetState = mostrarSplash,
-                animationSpec = tween(durationMillis = 600)
-            ) { splash ->
-                if (splash) {
+            Box(modifier = Modifier.fillMaxSize()) {
+
+                ConteudoApp()
+
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = mostrarSplash,
+                    exit = fadeOut(tween(500))
+                ) {
                     SplashScreen(onFinished = { mostrarSplash = false })
-                } else {
-                    ConteudoApp()
                 }
             }
         }
@@ -598,14 +599,13 @@ class MainActivity : ComponentActivity() {
         }
 
         Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .clip(RoundedCornerShape(20.dp))
+            modifier = Modifier.fillMaxSize()
         ) {
             if (pronto) {
                 AndroidView(
                     factory = { ctx ->
                         WebView(ctx).apply {
+                            setLayerType(android.view.View.LAYER_TYPE_SOFTWARE, null)
                             settings.javaScriptEnabled = true
                             settings.domStorageEnabled = true
 
@@ -658,13 +658,16 @@ class MainActivity : ComponentActivity() {
             </head>
             <body>
                 <div id="mapa"></div>
-                               <script>
+                <script>
                     console.log('PASSO 1: script iniciou');
 
                     try {
-                        console.log('PASSO 2: antes de criar o mapa');
+                        var latitudeInicial = $lat;
+                        var longitudeInicial = $lon;
 
-                        var mapa = L.map('mapa').setView([${'$'}lat, ${'$'}lon], 16);
+                        console.log('PASSO 2: coordenadas = ' + latitudeInicial + ', ' + longitudeInicial);
+
+                        var mapa = L.map('mapa').setView([latitudeInicial, longitudeInicial], 16);
 
                         console.log('PASSO 3: mapa criado');
 
@@ -683,7 +686,7 @@ class MainActivity : ComponentActivity() {
                             console.log('PASSO 5: tiles carregados com sucesso');
                         });
 
-                        var marcador = L.circleMarker([${'$'}lat, ${'$'}lon], {
+                        var marcador = L.circleMarker([latitudeInicial, longitudeInicial], {
                             radius: 10,
                             fillColor: "#00E676",
                             color: "#00E676",
