@@ -369,11 +369,11 @@ class MainActivity : ComponentActivity() {
     fun ConteudoInicial() {
 
         val rastreando = LocationService.rodando.value
-        val ultimoEnvio = LocationService.ultimoEnvioMillis.value
         val precisaoMetros = LocationService.precisaoMetros.value
 
         LaunchedEffect(rastreando) {
             while (isActive) {
+                val ultimoEnvio = LocationService.ultimoEnvioMillis.value
                 if (rastreando && ultimoEnvio > 0) {
                     segundosDesdeEnvio =
                         ((System.currentTimeMillis() - ultimoEnvio) / 1000).toInt()
